@@ -1,74 +1,53 @@
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } = require("@whiskeysockets/baileys");
-const P = require("pino");
-const chalk = require("chalk");
-const config = require("./config");
-const handler = require("./handler");
+const express = require('express');
+const path = require('path');
+const { startPairing } = require('./pair');
+const app = express();
+const PORT = process.env.PORT || 3000;
 
-async function startShah() {
-    const { state, saveCreds } = await useMultiFileAuthState("session");
-    const { version } = await fetchLatestBaileysVersion();
-
-    const conn = makeWASocket({
-        version,
-        logger: P({ level: "silent" }),
-        printQRInTerminal: false,
-        auth: state,
-        browser: ["SHAH-MD", "Safari", "3.0.0"]
-    });
-
-    // Pairing Code Request
-    if (!conn.authState.creds.registered) {
-        setTimeout(async () => {
-            let code = await conn.requestPairingCode(config.ownerNumber);
-            console.log(chalk.white.bgRed.bold("\n ☠️ YOUR PAIRING CODE: " + code + " \n"));
-        }, 3000);
-    }
-
-    conn.ev.on("creds.update", saveCreds);
-
-    conn.ev.on("connection.update", (update) => {
-        const { connection, lastDisconnect } = update;
-        if (connection === "open") {
-            console.log(chalk.green.bold("\n✅ SHAH-MD Connected! Ab shreekan de kalje phatne wale hain. ☠️"));
-        }
-        if (connection === "close") {
-            const shouldReconnect = lastDisconnect.error?.output?.statusCode !== DisconnectReason.loggedOut;
-            if (shouldReconnect) startShah();
-        }
-    });
-
-    // Message Handler Call
-    conn.ev.on("messages.upsert", async (chatUpdate) => {
-        const m = chatUpdate.messages[0];
-        await handler(conn, m);
-    });
-
-    // Automatic Welcome/Goodbye
-    conn.ev.on("group-participants.update", async (anu) => {
-        try {
-            let metadata = await conn.groupMetadata(anu.id);
-            let participants = anu.participants;
-            for (let num of participants) {
-                let ppuser;
-                try { ppuser = await conn.profilePictureUrl(num, 'image'); } 
-                catch { ppuser = 'https://telegra.ph/file/241fb404c000109c31406.jpg'; }
-
-                if (anu.action == 'add') {
-                    await conn.sendMessage(anu.id, { 
-                        image: { url: ppuser }, 
-                        caption: `Welcome @${num.split("@")[0]} to ${metadata.subject}!\n\nRule follow krin warna shreekan wala hall ho ga. ☠️`,
-                        mentions: [num]
-                    });
-                } else if (anu.action == 'remove') {
-                    await conn.sendMessage(anu.id, { 
-                        image: { url: ppuser }, 
-                        caption: `Goodbye @${num.split("@")[0]}!\n\nDafa ho jao! 👋☠️`,
-                        mentions: [num]
-                    });
+app.get('/', (req, res) => {
+    res.send(`
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>SHAH-MD Pairing</title>
+            <meta name="viewport" content="width=device-width, initial-scale=1">
+            <style>
+                body { background-color: #000; color: #fff; font-family: Arial; text-align: center; padding-top: 50px; }
+                input { padding: 12px; width: 80%; max-width: 300px; border-radius: 5px; border: none; margin-bottom: 20px; }
+                button { padding: 12px 25px; background-color: #1ed760; color: white; border: none; border-radius: 5px; cursor: pointer; font-weight: bold; }
+                #code { margin-top: 30px; font-size: 24px; letter-spacing: 5px; color: #1ed760; }
+            </style>
+        </head>
+        <body>
+            <h2>Shah Saab MD Pairing</h2>
+            <p>Enter number with country code (e.g. 923xxxxxxxx)</p>
+            <input type="number" id="num" placeholder="923223246090"><br>
+            <button onclick="getCode()">Get Pairing Code</button>
+            <div id="code"></div>
+            <script>
+                async function getCode() {
+                    const n = document.getElementById('num').value;
+                    const codeDiv = document.getElementById('code');
+                    if(!n) return alert('Number likho yaar!');
+                    codeDiv.innerText = "Mangwa raha hoon...";
+                    try {
+                        const res = await fetch('/pair?number=' + n);
+                        const data = await res.json();
+                        codeDiv.innerText = data.code || "Error: Dubara try karo";
+                    } catch (e) {
+                        codeDiv.innerText = "Server Error!";
+                    }
                 }
-            }
-        } catch (err) { console.log(err); }
-    });
-}
+            </script>
+        </body>
+        </html>
+    `);
+});
 
-startShah();
+app.get('/pair', async (req, res) => {
+    const num = req.query.number;
+    if (!num) return res.json({ error: "Number missing" });
+    await startPairing(num, res);
+});
+
+app.listen(PORT, () => console.log(`Server started on port ${PORT}`));
